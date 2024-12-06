@@ -1,0 +1,219 @@
+#include <SoftwareSerial.h>
+#include <DFRobotDFPlayerMini.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
+
+// Definições de pinos
+#define trigPin D7
+#define echoPin D8
+
+SoftwareSerial mySerial(D5, D6); // RX, TX
+DFRobotDFPlayerMini myDFPlayer;
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+long duration;
+float distance;
+bool isPlaying = false;
+bool hatOnHead = false;
+unsigned long lastCheckTime = 0;
+const unsigned long debounceTime = 1000;
+const float DISTANCE_THRESHOLD = 11.10;
+
+// Configuração do filtro de estabilidade
+const int numReadings = 5;
+float distanceReadings[numReadings];
+int readIndex = 0;
+float total = 0;
+float averageDistance = 0;
+
+// Contadores das casas
+int countGrifinoria = 0;
+int countSonserina = 0;
+int countCorvinal = 0;
+int countLufaLufa = 0;
+int totalMusicas = 0;
+
+// Configuração Wi-Fi
+const char* ssid = "FatecMaker";
+const char* password = "fatecbb2020";
+ESP8266WebServer server(80);
+
+int lastTrack = -1;
+
+void setup() {
+  Serial.begin(9600);
+  mySerial.begin(9600);
+
+  // Inicializa o módulo MP3
+  if (!myDFPlayer.begin(mySerial)) {
+    Serial.println("Erro ao inicializar o módulo MP3");
+    while (true);
+  }
+  myDFPlayer.volume(30);
+
+  // Inicializa o LCD
+  lcd.init();
+  lcd.backlight();
+  lcd.clear();
+
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+  digitalWrite(trigPin, LOW);
+
+  // Inicializar leituras do filtro
+  for (int i = 0; i < numReadings; i++) {
+    distanceReadings[i] = 0;
+  }
+
+  // Conectar ao Wi-Fi
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(100);
+    Serial.print(".");
+  }
+  Serial.println("\nConectado ao Wi-Fi!");
+  Serial.print("IP do servidor: ");
+  Serial.println(WiFi.localIP());
+
+  server.on("/", handleRoot);
+  server.begin();
+}
+
+void loop() {
+  server.handleClient();
+  measureDistance();
+
+  Serial.print("Distância média: ");
+  Serial.println(averageDistance);
+
+  unsigned long currentTime = millis();
+
+  if (averageDistance <= DISTANCE_THRESHOLD && !hatOnHead && !isPlaying) {
+    hatOnHead = true;
+    playRandomHouseSong();
+    lastCheckTime = currentTime;
+  }
+
+  if (averageDistance > DISTANCE_THRESHOLD && hatOnHead && (currentTime - lastCheckTime > debounceTime)) {
+    hatOnHead = false;
+    isPlaying = false;
+    lcd.clear();
+  }
+
+  if (isPlaying && myDFPlayer.available() && myDFPlayer.readType() == DFPlayerPlayFinished) {
+    isPlaying = false;
+    lcd.clear();
+  }
+}
+
+void measureDistance() {
+  delay(200);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  duration = pulseIn(echoPin, HIGH, 1000000);
+  float newDistance = (duration * 0.034) / 2;
+
+  if (newDistance > 0 && newDistance < 400) {
+    total -= distanceReadings[readIndex];
+    distanceReadings[readIndex] = newDistance;
+    total += distanceReadings[readIndex];
+    readIndex = (readIndex + 1) % numReadings;
+    averageDistance = total / numReadings;
+  }
+}
+
+void playRandomHouseSong() {
+  if (isPlaying) return;
+
+  int randomTrack;
+  do {
+    randomTrack = random(2, 6);
+  } while (randomTrack == lastTrack);
+
+  myDFPlayer.play(randomTrack);
+  isPlaying = true;
+  lastTrack = randomTrack;
+  updateHouseCount(randomTrack);
+  animateMouthWhilePlaying();
+  totalMusicas++;
+}
+
+void updateHouseCount(int track) {
+  switch (track) {
+    case 3: countGrifinoria++; break;
+    case 2: countSonserina++; break;
+    case 5: countCorvinal++; break;
+    case 4: countLufaLufa++; break;
+  }
+}
+
+void animateMouthWhilePlaying() {
+  const char* frames[] = { "|#|#|#|#|#|", "|-|#|-|#|-|", "|#|-|#|-|#", "|-|#|-|#|-|" };
+  while (isPlaying) {
+    for (int i = 0; i < 4; i++) {
+      lcd.setCursor(0, 0);
+      lcd.print(frames[i]);
+      lcd.setCursor(0, 1);
+      lcd.print("                ");
+      delay(200);
+    }
+    if (myDFPlayer.available() && myDFPlayer.readType() == DFPlayerPlayFinished) {
+      isPlaying = false;
+    }
+  }
+}
+
+void handleRoot() {
+  String page = "<html><head>";
+  page += "<meta charset='UTF-8'>";  
+  page += "<style>";
+  page += "body { font-family: Arial, sans-serif; text-align: center; margin: 0; padding: 0; background-color: #f4f4f9; }";
+  page += ".container { display: flex; justify-content: space-around; flex-wrap: wrap; padding: 20px; }";
+  page += ".house { text-align: center; margin: 20px; }";
+  page += ".house img { width: 150px; height: 150px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); }";
+  page += ".house p { font-size: 18px; font-weight: bold; margin-top: 10px; color: #333; }";
+  page += "h1 { color: #333; margin-top: 20px; font-size: 24px; }";
+  page += "</style>";
+  page += "</head><body>";
+
+  // Título
+  page += "<h1>Contagem de Escolhas</h1>";
+
+  // Exibindo o total de músicas tocadas
+  page += "<p>Total de músicas tocadas: " + String(totalMusicas) + "</p>";
+
+  // Container de casas
+  page += "<div class='container'>";
+
+  // Grifinória
+  page += "<div class='house'>";
+  page += "<img src='https://tm.ibxk.com.br/2021/05/02/02163114040021.jpg' alt='Grifinória'>";
+  page += "<p>Grifinória: " + String(countGrifinoria) + "</p>";
+  page += "</div>";
+
+  // Sonserina
+  page += "<div class='house'>";
+  page += "<img src='https://w7.pngwing.com/pngs/869/121/png-transparent-slytherin-logo-slytherin-house-hogwarts-harry-potter-professor-severus-snape-helga-hufflepuff-harry-potter-logo-bellatrix-lestrange-slytherin-house.png' alt='Sonserina'>";
+  page += "<p>Sonserina: " + String(countSonserina) + "</p>";
+  page += "</div>";
+
+  // Corvinal
+  page += "<div class='house'>";
+  page += "<img src='https://w7.pngwing.com/pngs/585/130/png-transparent-ravenclaw-illustration-harry-potter-sorting-hat-helena-ravenclaw-ravenclaw-house-hogwarts-horned-icon-logo-helga-hufflepuff-artifact.png' alt='Corvinal'>";
+  page += "<p>Corvinal: " + String(countCorvinal) + "</p>";
+  page += "</div>";
+
+  // Lufa-Lufa
+  page += "<div class='house'>";
+  page += "<img src='https://img.elo7.com.br/product/main/42C420C/arte-digital-vetor-hogwarts-lufa-lufa-harry-potter-lufa-lufa.jpg' alt='Lufa-Lufa'>";
+  page += "<p>Lufa-Lufa: " + String(countLufaLufa) + "</p>";
+  page += "</div>";
+
+  page += "</div>"; // Fecha o container
+  page += "</body></html>";
+
+  server.send(200, "text/html", page);
+}
